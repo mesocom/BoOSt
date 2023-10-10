@@ -24,10 +24,10 @@
 
 /************CONFIG**************/
 #define SERIAL_DEBUG 1
-#define STATION_ID "BOOST01"
+#define STATION_ID "BOOST06"
 #define MAX_TEMP_SENSORS 1
 DeviceAddress dsAddresses[MAX_TEMP_SENSORS] = {
-  {0x28, 0xA4, 0xA4, 0x1F, 0xF, 0x0, 0x0, 0x4F}
+{0x28, 0x2C, 0x97, 0xE, 0xF, 0x0, 0x0, 0x79}
 };
 /************CONFIG**************/
 
@@ -71,9 +71,13 @@ Adafruit_ADS1115 ads0;
 
 
 // Davis
-float wspd_counter = 0;
+volatile unsigned long wspd_counter = 0;
+volatile unsigned long ContactBounceTime;
 void IRAM_ATTR Davis_ISR() {
-  wspd_counter += 1.0;
+  if ((millis() - ContactBounceTime) > 15 ) { // debounce the switch contact.
+    wspd_counter++;
+    ContactBounceTime = millis();
+  }
 }
 
 
@@ -140,15 +144,15 @@ void setup() {
   }
   ads0.setGain(GAIN_TWOTHIRDS);
 
-  /* BMP688 Initialization */
-  while (!bme.begin()) {
-    if (SERIAL_DEBUG) Serial.println(F("Failed to initialize BME688"));
-    systemStatus(STATUS_ERROR);
-  }
-
   /* AQI Initialization */
   while (!aqi.begin_I2C()) {
     if (SERIAL_DEBUG) Serial.println(F("Failed to initialize PM 2.5"));
+    systemStatus(STATUS_ERROR);
+  }
+
+  /* BMP688 Initialization */
+  while (!bme.begin()) {
+    if (SERIAL_DEBUG) Serial.println(F("Failed to initialize BME688"));
     systemStatus(STATUS_ERROR);
   }
   
@@ -205,14 +209,13 @@ void logDataPoint(DateTime currentTime, char *d) {
 
 
   // Measure 3s wind speed
-  uint32_t startTime = xTaskGetTickCountFromISR()*portTICK_PERIOD_MS;
+  if (SERIAL_DEBUG) Serial.println(F("Measuring wind speed"));
+  uint32_t startTime = millis();
   int interruptNumber = digitalPinToInterrupt(WSPD_PIN);
   attachInterrupt(interruptNumber, Davis_ISR, FALLING);
-  while (xTaskGetTickCountFromISR()*portTICK_PERIOD_MS - startTime < 3000) {
-    vTaskDelay(10);
-  }
+  while (millis() - startTime < 3000) {delay(10);}
   detachInterrupt(interruptNumber);
-  if (SERIAL_DEBUG) Serial.println(F("Measured Wind"));
+  if (SERIAL_DEBUG) Serial.println(F("Measured Wind Speed"));
   
   // Character array position
   int p = 0;
@@ -249,7 +252,7 @@ void logDataPoint(DateTime currentTime, char *d) {
 
   // Wind Speed v = p * 2.25/t * .44704 for m/s --> v = p * 0.33528
   dtostrf(
-      wspd_counter * 0.33528,
+      float(wspd_counter) * 0.33528,
       4, 5, d + p);
   p+=5;
   d[p] = ','; p+=1;
@@ -327,8 +330,8 @@ void logDataPoint(DateTime currentTime, char *d) {
   // Log to SD card - new file each day to prevent loss - and upload buffer
   Serial.print(F("Saving to SD..."));
 
-  char path[23];
-  sprintf(path, "%s_%04d-%02d-%02d.txt", STATION_ID, currentTime.year(), currentTime.month(), currentTime.day());
+  char path[26];
+  sprintf(path, "%s_%04d-%02d-%02d-%02d.txt", STATION_ID, currentTime.year(), currentTime.month(), currentTime.day(), currentTime.hour());
   if (SERIAL_DEBUG) Serial.println(F("Starting save process..."));
   appendLogFile(path, d);
 
